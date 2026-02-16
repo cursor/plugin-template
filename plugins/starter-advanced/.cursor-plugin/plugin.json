@@ -8,6 +8,15 @@
     "email": "plugins@example.com"
   },
   "license": "MIT",
-  "keywords": ["cursor", "plugin", "rules", "skills", "agents", "commands", "hooks", "mcp"],
-  "logo": "assets/logo.svg"
+  "keywords": [
+    "cursor",
+    "plugin",
+    "rules",
+    "skills",
+    "agents",
+    "commands",
+    "hooks",
+    "mcp"
+  ],
+  "logo": "assets/avatar.png"
 }
