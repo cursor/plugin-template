@@ -13,9 +13,22 @@ Two starter plugins are included:
 
 1. `.cursor-plugin/marketplace.json`: set marketplace `name`, `owner`, and `metadata`.
 2. `plugins/*/.cursor-plugin/plugin.json`: set `name` (lowercase kebab-case), `displayName`, `author`, `description`, `keywords`, `license`, and `version`.
-3. Replace placeholder rules, skills, agents, commands, hooks, scripts, and logos.
+3. Replace `assets/avatar.png` with your own plugin avatar (PNG, recommended 128x128 or larger).
+4. Replace placeholder rules, skills, agents, commands, hooks, and scripts.
 
 To add more plugins, see `docs/add-a-plugin.md`.
+
+## Plugin avatar
+
+Each plugin includes an `assets/avatar.png` that is displayed in the Cursor Marketplace. The `logo` field in `.cursor-plugin/plugin.json` points to this file:
+
+```json
+{
+  "logo": "assets/avatar.png"
+}
+```
+
+Replace the default avatar with your own PNG image. Keep it square and at least 128x128 pixels for best results.
 
 ## Single plugin vs multi-plugin
 
@@ -29,6 +42,6 @@ For a **single plugin**, move your plugin folder contents to the repository root
 - Plugin names are unique, lowercase, and kebab-case.
 - `.cursor-plugin/marketplace.json` entries map to real plugin folders.
 - All frontmatter metadata is present in rule, skill, agent, and command files.
-- Logos are committed and referenced with relative paths.
+- Each plugin has an `assets/avatar.png` referenced by the `logo` field in its manifest.
 - `node scripts/validate-template.mjs` passes.
 - Repository link is ready for submission to the Cursor team (Slack or `kniparko@anysphere.com`).
