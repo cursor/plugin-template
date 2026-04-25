@@ -249,6 +249,34 @@ function resolveMarketplaceSource(source, pluginRoot) {
 
 async function main() {
   const marketplacePath = path.join(repoRoot, ".cursor-plugin", "marketplace.json");
+  const pluginManifestPath = path.join(repoRoot, ".cursor-plugin", "plugin.json");
+
+  const hasMarketplace = await pathExists(marketplacePath);
+  const hasSinglePlugin = await pathExists(pluginManifestPath);
+
+  if (!hasMarketplace && hasSinglePlugin) {
+    const pluginManifest = await readJsonFile(pluginManifestPath, "Plugin manifest");
+    if (!pluginManifest) {
+      summarizeAndExit();
+      return;
+    }
+
+    const pluginName = pluginManifest.name || "plugin";
+
+    const manifestFields = ["logo", "rules", "skills", "agents", "commands", "hooks", "mcpServers"];
+    for (const field of manifestFields) {
+      const values = extractPathValues(pluginManifest[field]);
+      for (const value of values) {
+        await validateReferencedPath(repoRoot, field, value, pluginName);
+      }
+    }
+
+    await validateComponentFrontmatter(repoRoot, pluginName);
+
+    summarizeAndExit();
+    return;
+  }
+
   const marketplace = await readJsonFile(marketplacePath, "Marketplace manifest");
   if (!marketplace) {
     summarizeAndExit();
