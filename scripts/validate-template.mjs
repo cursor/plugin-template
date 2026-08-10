@@ -9,7 +9,24 @@ const errors = [];
 const warnings = [];
 
 const pluginNamePattern = /^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/;
+const agentPluginNamePattern = /^(?!.*(?:--|\.\.))[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/;
 const marketplaceNamePattern = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
+const agentPluginSchema = "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json";
+const agentMcpSchema = "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json";
+const agentPluginFields = new Set([
+  "$schema",
+  "name",
+  "version",
+  "description",
+  "author",
+  "homepage",
+  "repository",
+  "license",
+  "keywords",
+  "extensions",
+]);
+const agentAuthorFields = new Set(["name", "email", "url"]);
+const agentMcpTypes = new Set(["stdio", "streamable-http", "sse"]);
 
 function addError(message) {
   errors.push(message);
@@ -232,6 +249,135 @@ async function validateComponentFrontmatter(pluginDir, pluginName) {
   }
 }
 
+async function detectPluginFormat(pluginDir) {
+  const cursorManifestPath = path.join(pluginDir, ".cursor-plugin", "plugin.json");
+  const agentManifestPath = path.join(pluginDir, "plugin.json");
+  const hasCursorManifest = await pathExists(cursorManifestPath);
+  const hasAgentManifest = await pathExists(agentManifestPath);
+
+  if (hasAgentManifest) {
+    const agentManifest = await readJsonFile(agentManifestPath, "plugin.json");
+    if (!agentManifest) {
+      return { format: null, manifestPath: agentManifestPath, manifest: null, hasCursorManifest };
+    }
+    if (agentManifest.$schema === agentPluginSchema) {
+      return {
+        format: "agent",
+        manifestPath: agentManifestPath,
+        manifest: agentManifest,
+        hasCursorManifest,
+      };
+    }
+    if (!hasCursorManifest) {
+      addError(
+        `plugin.json is missing the Agent Plugins $schema (${agentPluginSchema}): ${agentManifestPath}`
+      );
+      return { format: null, manifestPath: agentManifestPath, manifest: agentManifest, hasCursorManifest };
+    }
+  }
+
+  if (hasCursorManifest) {
+    const cursorManifest = await readJsonFile(
+      cursorManifestPath,
+      path.relative(repoRoot, cursorManifestPath)
+    );
+    return {
+      format: "cursor",
+      manifestPath: cursorManifestPath,
+      manifest: cursorManifest,
+      hasCursorManifest,
+    };
+  }
+
+  addError(
+    `Missing plugin manifest. Add .cursor-plugin/plugin.json for a Cursor Plugin or plugin.json with $schema for an Agent Plugin: ${pluginDir}`
+  );
+  return { format: null, manifestPath: null, manifest: null, hasCursorManifest };
+}
+
+function validateAgentPluginManifest(pluginManifest, pluginName) {
+  if (pluginManifest.$schema !== agentPluginSchema) {
+    addError(`${pluginName}: plugin.json "$schema" must be "${agentPluginSchema}".`);
+  }
+
+  if (typeof pluginManifest.name !== "string" || !agentPluginNamePattern.test(pluginManifest.name)) {
+    addError(
+      `${pluginName}: "name" in plugin.json must be 1-64 chars, lowercase, and use only alphanumerics, hyphens, and periods without "--" or "..".`
+    );
+  }
+
+  for (const key of Object.keys(pluginManifest)) {
+    if (!agentPluginFields.has(key)) {
+      addWarning(
+        `${pluginName}: unknown plugin.json field "${key}" is not part of the Agent Plugins schema and will be ignored.`
+      );
+    }
+  }
+
+  if (pluginManifest.author !== undefined) {
+    if (!pluginManifest.author || typeof pluginManifest.author !== "object" || Array.isArray(pluginManifest.author)) {
+      addError(`${pluginName}: "author" must be an object with optional name, email, and url.`);
+    } else {
+      for (const key of Object.keys(pluginManifest.author)) {
+        if (!agentAuthorFields.has(key)) {
+          addError(`${pluginName}: "author.${key}" is not allowed. Use name, email, or url.`);
+        } else if (typeof pluginManifest.author[key] !== "string") {
+          addError(`${pluginName}: "author.${key}" must be a string.`);
+        }
+      }
+    }
+  }
+
+  if (pluginManifest.keywords !== undefined && !Array.isArray(pluginManifest.keywords)) {
+    addError(`${pluginName}: "keywords" must be an array of strings.`);
+  }
+}
+
+async function validateAgentMcpConfig(pluginDir, pluginName) {
+  const mcpPath = path.join(pluginDir, "mcp.json");
+  if (!(await pathExists(mcpPath))) {
+    return;
+  }
+
+  const mcpConfig = await readJsonFile(mcpPath, `${pluginName} mcp.json`);
+  if (!mcpConfig) {
+    return;
+  }
+
+  if (mcpConfig.$schema !== agentMcpSchema) {
+    addError(`${pluginName}: mcp.json "$schema" must be "${agentMcpSchema}".`);
+  }
+
+  if (!mcpConfig.mcpServers || typeof mcpConfig.mcpServers !== "object" || Array.isArray(mcpConfig.mcpServers)) {
+    addError(`${pluginName}: mcp.json must contain an "mcpServers" object.`);
+    return;
+  }
+
+  for (const [serverName, server] of Object.entries(mcpConfig.mcpServers)) {
+    if (!server || typeof server !== "object") {
+      addError(`${pluginName}: mcpServers.${serverName} must be an object.`);
+      continue;
+    }
+
+    if (!agentMcpTypes.has(server.type)) {
+      addError(
+        `${pluginName}: mcpServers.${serverName}.type must be "stdio", "streamable-http", or "sse".`
+      );
+      continue;
+    }
+
+    if (server.type === "stdio") {
+      if (typeof server.command !== "string" || server.command.length === 0) {
+        addError(`${pluginName}: mcpServers.${serverName}.command is required for stdio servers.`);
+      } else if (server.command.startsWith("./")) {
+        await validateReferencedPath(pluginDir, `mcpServers.${serverName}.command`, server.command, pluginName);
+      }
+    } else if (typeof server.url !== "string" || server.url.length === 0) {
+      addError(`${pluginName}: mcpServers.${serverName}.url is required for ${server.type} servers.`);
+    }
+  }
+}
+
 function resolveMarketplaceSource(source, pluginRoot) {
   if (typeof source !== "string" || source.length === 0) {
     return null;
@@ -316,13 +462,21 @@ async function main() {
       continue;
     }
 
-    const manifestPath = path.join(pluginDir, ".cursor-plugin", "plugin.json");
-    const pluginManifest = await readJsonFile(manifestPath, `${entry.name} plugin manifest`);
-    if (!pluginManifest) {
+    const detected = await detectPluginFormat(pluginDir);
+    const pluginManifest = detected.manifest;
+    if (!detected.format || !pluginManifest) {
       continue;
     }
 
-    if (typeof pluginManifest.name !== "string" || !pluginNamePattern.test(pluginManifest.name)) {
+    if (detected.format === "agent" && detected.hasCursorManifest) {
+      addWarning(
+        `${entry.name}: found both plugin.json and .cursor-plugin/plugin.json. Validating as an Agent Plugin.`
+      );
+    }
+
+    if (detected.format === "agent") {
+      validateAgentPluginManifest(pluginManifest, entry.name);
+    } else if (typeof pluginManifest.name !== "string" || !pluginNamePattern.test(pluginManifest.name)) {
       addError(
         `${entry.name}: "name" in plugin.json must be lowercase and use only alphanumerics, hyphens, and periods.`
       );
@@ -334,25 +488,29 @@ async function main() {
       );
     }
 
-    const manifestFields = ["logo", "rules", "skills", "agents", "commands", "hooks", "mcpServers"];
-    for (const field of manifestFields) {
-      const values = extractPathValues(pluginManifest[field]);
-      for (const value of values) {
-        await validateReferencedPath(pluginDir, field, value, entry.name);
+    if (detected.format === "cursor") {
+      const manifestFields = ["logo", "rules", "skills", "agents", "commands", "hooks", "mcpServers"];
+      for (const field of manifestFields) {
+        const values = extractPathValues(pluginManifest[field]);
+        for (const value of values) {
+          await validateReferencedPath(pluginDir, field, value, entry.name);
+        }
       }
+
+      const hooksPath = path.join(pluginDir, "hooks", "hooks.json");
+      if (!(await pathExists(hooksPath))) {
+        addWarning(`${entry.name}: no hooks/hooks.json file found (only needed when using hooks).`);
+      }
+
+      const mcpPath = path.join(pluginDir, "mcp.json");
+      if (!(await pathExists(mcpPath))) {
+        addWarning(`${entry.name}: no mcp.json file found (only needed when using MCP servers).`);
+      }
+    } else {
+      await validateAgentMcpConfig(pluginDir, entry.name);
     }
 
     await validateComponentFrontmatter(pluginDir, entry.name);
-
-    const hooksPath = path.join(pluginDir, "hooks", "hooks.json");
-    if (!(await pathExists(hooksPath))) {
-      addWarning(`${entry.name}: no hooks/hooks.json file found (only needed when using hooks).`);
-    }
-
-    const mcpPath = path.join(pluginDir, "mcp.json");
-    if (!(await pathExists(mcpPath))) {
-      addWarning(`${entry.name}: no mcp.json file found (only needed when using MCP servers).`);
-    }
   }
 
   summarizeAndExit();

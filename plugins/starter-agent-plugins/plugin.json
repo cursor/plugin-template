@@ -1,0 +1,13 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "starter-agent-plugins",
+  "version": "1.0.0",
+  "description": "Minimal Agent Plugin starter with skills and MCP servers.",
+  "author": {
+    "name": "Your Org",
+    "email": "plugins@example.com"
+  },
+  "license": "MIT",
+  "homepage": "https://agent-plugins.org/",
+  "keywords": ["agent-plugins", "skills", "mcp"]
+}
