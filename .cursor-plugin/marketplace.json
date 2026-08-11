@@ -18,6 +18,11 @@
       "name": "starter-advanced",
       "source": "./plugins/starter-advanced",
       "description": "Full-featured plugin with rules, skills, agents, commands, hooks, and MCP"
+    },
+    {
+      "name": "starter-agent-plugins",
+      "source": "./plugins/starter-agent-plugins",
+      "description": "Minimal Agent Plugin with skills and MCP"
     }
   ]
 }
