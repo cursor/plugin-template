@@ -1,19 +1,20 @@
 {
+  "version": 1,
   "hooks": {
     "afterFileEdit": [
       {
-        "command": "./scripts/format-code.sh"
+        "command": "bash \"${CURSOR_PLUGIN_ROOT}/scripts/format-code.sh\""
       }
     ],
     "beforeShellExecution": [
       {
-        "command": "./scripts/validate-shell.sh",
+        "command": "bash \"${CURSOR_PLUGIN_ROOT}/scripts/validate-shell.sh\"",
         "matcher": "rm|curl|wget"
       }
     ],
     "sessionEnd": [
       {
-        "command": "./scripts/audit.sh"
+        "command": "bash \"${CURSOR_PLUGIN_ROOT}/scripts/audit.sh\""
       }
     ]
   }

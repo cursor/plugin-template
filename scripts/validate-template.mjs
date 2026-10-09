@@ -8,7 +8,8 @@ const repoRoot = process.cwd();
 const errors = [];
 const warnings = [];
 
-const pluginNamePattern = /^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/;
+const pluginNamePattern = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
+const semverPattern = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
 const marketplaceNamePattern = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
 
 function addError(message) {
@@ -205,6 +206,7 @@ async function validateComponentFrontmatter(pluginDir, pluginName) {
     for (const file of files) {
       if (path.basename(file) === "SKILL.md") {
         await validateFrontmatterFile(file, "skill", ["name", "description"], pluginName);
+        await validateSkillNameMatchesDirectory(file, pluginName);
       }
     }
   }
@@ -228,6 +230,187 @@ async function validateComponentFrontmatter(pluginDir, pluginName) {
       if (ext === ".md" || ext === ".mdc" || ext === ".markdown" || ext === ".txt") {
         await validateFrontmatterFile(file, "command", ["name", "description"], pluginName);
       }
+    }
+  }
+}
+
+async function validateSkillNameMatchesDirectory(filePath, pluginName) {
+  const content = await fs.readFile(filePath, "utf8");
+  const parsed = parseFrontmatter(content);
+  if (!parsed || !parsed.name) {
+    return;
+  }
+  const directoryName = path.basename(path.dirname(filePath));
+  if (parsed.name !== directoryName) {
+    addWarning(
+      `${pluginName}: skill "name" (${parsed.name}) does not match its directory (${directoryName}). Slash commands use the directory name, so keep them identical.`
+    );
+  }
+}
+
+const knownHookEvents = new Set([
+  "beforeShellExecution",
+  "afterShellExecution",
+  "beforeMCPExecution",
+  "afterMCPExecution",
+  "beforeReadFile",
+  "afterFileEdit",
+  "beforeTabFileRead",
+  "afterTabFileEdit",
+  "preToolUse",
+  "postToolUse",
+  "postToolUseFailure",
+  "subagentStart",
+  "subagentStop",
+  "beforeSubmitPrompt",
+  "preCompact",
+  "afterAgentResponse",
+  "afterAgentThought",
+  "stop",
+  "sessionStart",
+  "sessionEnd",
+  "workspaceOpen",
+]);
+
+function referencedPluginFile(command) {
+  // `bash "${CURSOR_PLUGIN_ROOT}/hooks/x.sh"`, `${CURSOR_PLUGIN_ROOT}/hooks/x.sh`, `./hooks/x.sh`
+  const rootMatch = command.match(/\$\{CURSOR_PLUGIN_ROOT\}\/([^\s"']+)/);
+  if (rootMatch) {
+    return { relativePath: rootMatch[1], cwdRelative: false };
+  }
+  const relativeMatch = command.match(/(?:^|\s)\.\/([^\s"']+)/);
+  if (relativeMatch) {
+    return { relativePath: relativeMatch[1], cwdRelative: true };
+  }
+  return null;
+}
+
+async function validateHooksConfig(pluginDir, pluginName) {
+  const hooksPath = path.join(pluginDir, "hooks", "hooks.json");
+  if (!(await pathExists(hooksPath))) {
+    addWarning(`${pluginName}: no hooks/hooks.json file found (only needed when using hooks).`);
+    return;
+  }
+
+  const config = await readJsonFile(hooksPath, `${pluginName} hooks.json`);
+  if (!config) {
+    return;
+  }
+
+  if (!Number.isInteger(config.version) || config.version < 1) {
+    addError(`${pluginName}: hooks.json must declare "version" as a positive integer (use 1).`);
+  }
+
+  if (!config.hooks || typeof config.hooks !== "object" || Array.isArray(config.hooks)) {
+    addError(`${pluginName}: hooks.json must contain a "hooks" object keyed by event name.`);
+    return;
+  }
+
+  for (const [eventName, definitions] of Object.entries(config.hooks)) {
+    if (!knownHookEvents.has(eventName)) {
+      addWarning(`${pluginName}: hooks.json uses unknown hook event "${eventName}".`);
+    }
+    if (!Array.isArray(definitions)) {
+      addError(`${pluginName}: hooks.json "${eventName}" must be an array of hook definitions.`);
+      continue;
+    }
+    for (const [index, definition] of definitions.entries()) {
+      const label = `hooks.json "${eventName}"[${index}]`;
+      if (!definition || typeof definition.command !== "string" || definition.command.length === 0) {
+        addError(`${pluginName}: ${label} is missing a "command" string.`);
+        continue;
+      }
+      const referenced = referencedPluginFile(definition.command);
+      if (!referenced) {
+        continue;
+      }
+      if (referenced.cwdRelative) {
+        addWarning(
+          `${pluginName}: ${label} runs "${definition.command}" relative to the current directory. Plugin hooks do not run from the plugin folder; use bash "\${CURSOR_PLUGIN_ROOT}/${referenced.relativePath}".`
+        );
+      }
+      if (!isSafeRelativePath(referenced.relativePath)) {
+        addError(`${pluginName}: ${label} references an unsafe path "${referenced.relativePath}".`);
+        continue;
+      }
+      const scriptPath = path.resolve(pluginDir, referenced.relativePath);
+      if (!(await pathExists(scriptPath))) {
+        addError(`${pluginName}: ${label} references missing script "${referenced.relativePath}".`);
+        continue;
+      }
+      if (referenced.relativePath.endsWith(".sh") && !definition.command.trimStart().startsWith("bash ")) {
+        const stat = await fs.stat(scriptPath);
+        if ((stat.mode & 0o111) === 0) {
+          addWarning(
+            `${pluginName}: ${label} script "${referenced.relativePath}" is not executable; run chmod +x or invoke it with bash.`
+          );
+        }
+      }
+    }
+  }
+}
+
+function collectPlaceholders(value, found) {
+  if (typeof value === "string") {
+    for (const match of value.matchAll(/\$\{([A-Z0-9_]+)(?::-[^}]*)?\}/g)) {
+      found.add(match[1]);
+    }
+  } else if (Array.isArray(value)) {
+    for (const item of value) collectPlaceholders(item, found);
+  } else if (value && typeof value === "object") {
+    for (const item of Object.values(value)) collectPlaceholders(item, found);
+  }
+}
+
+async function validateMcpConfig(pluginDir, pluginName, pluginManifest) {
+  const mcpPath = path.join(pluginDir, "mcp.json");
+  if (!(await pathExists(mcpPath))) {
+    addWarning(`${pluginName}: no mcp.json file found (only needed when using MCP servers).`);
+    return;
+  }
+
+  const config = await readJsonFile(mcpPath, `${pluginName} mcp.json`);
+  if (!config) {
+    return;
+  }
+
+  const servers = config.mcpServers;
+  if (!servers || typeof servers !== "object" || Array.isArray(servers) || Object.keys(servers).length === 0) {
+    addError(`${pluginName}: mcp.json must contain a non-empty "mcpServers" object.`);
+    return;
+  }
+
+  const placeholders = new Set();
+  for (const [serverName, server] of Object.entries(servers)) {
+    if (!server || typeof server !== "object") {
+      addError(`${pluginName}: mcp.json server "${serverName}" must be an object.`);
+      continue;
+    }
+    const hasCommand = typeof server.command === "string" && server.command.length > 0;
+    const hasUrl = typeof server.url === "string" && server.url.length > 0;
+    if (!hasCommand && !hasUrl) {
+      addError(`${pluginName}: mcp.json server "${serverName}" needs either "command" (stdio) or "url" (http/sse).`);
+    }
+    if (hasUrl && server.url.startsWith("http://") && !/^http:\/\/(localhost|127\.0\.0\.1)/.test(server.url)) {
+      addWarning(`${pluginName}: mcp.json server "${serverName}" uses plain http; prefer https.`);
+    }
+    if (hasCommand && Array.isArray(server.args)) {
+      for (const arg of server.args) {
+        if (typeof arg === "string" && /@latest$/.test(arg)) {
+          addWarning(`${pluginName}: mcp.json server "${serverName}" runs "${arg}"; pin a version so installs are reproducible.`);
+        }
+      }
+    }
+    collectPlaceholders(server, placeholders);
+  }
+
+  placeholders.delete("CURSOR_PLUGIN_ROOT");
+  const declared = new Set(Object.keys(pluginManifest?.variables?.properties ?? {}));
+  for (const name of placeholders) {
+    if (!declared.has(name)) {
+      addWarning(
+        `${pluginName}: mcp.json references \${${name}} but plugin.json declares no "variables.properties.${name}", so users are never asked for it.`
+      );
     }
   }
 }
@@ -324,7 +507,7 @@ async function main() {
 
     if (typeof pluginManifest.name !== "string" || !pluginNamePattern.test(pluginManifest.name)) {
       addError(
-        `${entry.name}: "name" in plugin.json must be lowercase and use only alphanumerics, hyphens, and periods.`
+        `${entry.name}: "name" in plugin.json must be lowercase kebab-case (alphanumerics and hyphens, starting and ending with an alphanumeric).`
       );
     }
 
@@ -342,17 +525,13 @@ async function main() {
       }
     }
 
+    if (typeof pluginManifest.version === "string" && !semverPattern.test(pluginManifest.version)) {
+      addWarning(`${entry.name}: "version" in plugin.json (${pluginManifest.version}) is not semver (x.y.z).`);
+    }
+
     await validateComponentFrontmatter(pluginDir, entry.name);
-
-    const hooksPath = path.join(pluginDir, "hooks", "hooks.json");
-    if (!(await pathExists(hooksPath))) {
-      addWarning(`${entry.name}: no hooks/hooks.json file found (only needed when using hooks).`);
-    }
-
-    const mcpPath = path.join(pluginDir, "mcp.json");
-    if (!(await pathExists(mcpPath))) {
-      addWarning(`${entry.name}: no mcp.json file found (only needed when using MCP servers).`);
-    }
+    await validateHooksConfig(pluginDir, entry.name);
+    await validateMcpConfig(pluginDir, entry.name, pluginManifest);
   }
 
   summarizeAndExit();

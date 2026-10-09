@@ -1,11 +1,8 @@
 {
   "mcpServers": {
-    "postgres": {
+    "memory": {
       "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-postgres"],
-      "env": {
-        "POSTGRES_CONNECTION_STRING": "${POSTGRES_URL}"
-      }
+      "args": ["-y", "@modelcontextprotocol/server-memory@2026.8.31"]
     }
   }
 }

@@ -31,4 +31,4 @@ For a **single plugin**, move your plugin folder contents to the repository root
 - All frontmatter metadata is present in rule, skill, agent, and command files.
 - Logos are committed and referenced with relative paths.
 - `node scripts/validate-template.mjs` passes.
-- Repository link is ready for submission to the Cursor team (Slack or `kniparko@anysphere.com`).
+- Repository is public and submitted at [cursor.directory/plugins/new](https://cursor.directory/plugins/new) (community directory). Listings for the curated marketplace on cursor.com go through [cursor.com/marketplace/publish](https://cursor.com/marketplace/publish).
