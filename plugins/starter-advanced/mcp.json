@@ -2,7 +2,7 @@
   "mcpServers": {
     "postgres": {
       "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-postgres"],
+      "args": ["-y", "@modelcontextprotocol/server-postgres@0.6.2"],
       "env": {
         "POSTGRES_CONNECTION_STRING": "${POSTGRES_URL}"
       }
